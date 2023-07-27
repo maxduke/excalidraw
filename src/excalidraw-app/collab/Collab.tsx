@@ -171,7 +171,10 @@ class Collab extends PureComponent<Props, CollabState> {
 
     appJotaiStore.set(collabAPIAtom, collabAPI);
 
-    if (import.meta.env.MODE === ENV.TEST || import.meta.env.DEV) {
+    if (
+      process.env.NODE_ENV === ENV.TEST ||
+      process.env.NODE_ENV === ENV.DEVELOPMENT
+    ) {
       window.collab = window.collab || ({} as Window["collab"]);
       Object.defineProperties(window, {
         collab: {
@@ -330,7 +333,7 @@ class Collab extends PureComponent<Props, CollabState> {
      * Indicates whether to fetch files that are errored or pending and older
      * than 10 seconds.
      *
-     * Use this as a machanism to fetch files which may be ok but for some
+     * Use this as a mechanism to fetch files which may be ok but for some
      * reason their status was not updated correctly.
      */
     forceFetchFiles?: boolean;
@@ -857,7 +860,10 @@ declare global {
   }
 }
 
-if (import.meta.env.MODE === ENV.TEST || import.meta.env.DEV) {
+if (
+  process.env.NODE_ENV === ENV.TEST ||
+  process.env.NODE_ENV === ENV.DEVELOPMENT
+) {
   window.collab = window.collab || ({} as Window["collab"]);
 }
 
