@@ -246,6 +246,7 @@ import {
   ToolType,
   OnUserFollowedPayload,
   UnsubscribeCallback,
+  EmbedsValidationStatus,
   ElementsPendingErasure,
 } from "../types";
 import {
@@ -384,8 +385,7 @@ import { isSidebarDockedAtom } from "./Sidebar/Sidebar";
 import { StaticCanvas, InteractiveCanvas } from "./canvases";
 import { Renderer } from "../scene/Renderer";
 import { ShapeCache } from "../scene/ShapeCache";
-import { LaserToolOverlay } from "./LaserTool/LaserTool";
-import { LaserPathManager } from "./LaserTool/LaserPathManager";
+import { SVGLayer } from "./SVGLayer";
 import {
   setEraserCursor,
   setCursor,
@@ -401,6 +401,10 @@ import { ElementCanvasButton } from "./MagicButton";
 import { MagicIcon, copyIcon, fullscreenIcon } from "./icons";
 import { EditorLocalStorage } from "../data/EditorLocalStorage";
 import FollowMode from "./FollowMode/FollowMode";
+
+import { AnimationFrameHandler } from "../animation-frame-handler";
+import { AnimatedTrail } from "../animated-trail";
+import { LaserTrails } from "../laser-trails";
 import { withBatchedUpdates, withBatchedUpdatesThrottled } from "../reactUtils";
 import { getRenderOpacity } from "../renderer/renderElement";
 
@@ -526,6 +530,15 @@ class App extends React.Component<AppProps, AppState> {
   public files: BinaryFiles = {};
   public imageCache: AppClassProperties["imageCache"] = new Map();
   private iFrameRefs = new Map<ExcalidrawElement["id"], HTMLIFrameElement>();
+  /**
+   * Indicates whether the embeddable's url has been validated for rendering.
+   * If value not set, indicates that the validation is pending.
+   * Initially or on url change the flag is not reset so that we can guarantee
+   * the validation came from a trusted source (the editor).
+   **/
+  private embedsValidationStatus: EmbedsValidationStatus = new Map();
+  /** embeds that have been inserted to DOM (as a perf optim, we don't want to
+   * insert to DOM before user initially scrolls to them) */
   private initializedEmbeds = new Set<ExcalidrawIframeLikeElement["id"]>();
 
   private elementsPendingErasure: ElementsPendingErasure = new Set();
@@ -537,7 +550,29 @@ class App extends React.Component<AppProps, AppState> {
   lastPointerMoveEvent: PointerEvent | null = null;
   lastViewportPosition = { x: 0, y: 0 };
 
-  laserPathManager: LaserPathManager = new LaserPathManager(this);
+  animationFrameHandler = new AnimationFrameHandler();
+
+  laserTrails = new LaserTrails(this.animationFrameHandler, this);
+  eraserTrail = new AnimatedTrail(this.animationFrameHandler, this, {
+    streamline: 0.2,
+    size: 5,
+    keepHead: true,
+    sizeMapping: (c) => {
+      const DECAY_TIME = 200;
+      const DECAY_LENGTH = 10;
+      const t = Math.max(0, 1 - (performance.now() - c.pressure) / DECAY_TIME);
+      const l =
+        (DECAY_LENGTH -
+          Math.min(DECAY_LENGTH, c.totalLength - c.currentIndex)) /
+        DECAY_LENGTH;
+
+      return Math.min(easeOut(l), easeOut(t));
+    },
+    fill: () =>
+      this.state.theme === THEME.LIGHT
+        ? "rgba(0, 0, 0, 0.2)"
+        : "rgba(255, 255, 255, 0.2)",
+  });
 
   onChangeEmitter = new Emitter<
     [
@@ -844,6 +879,14 @@ class App extends React.Component<AppProps, AppState> {
     );
   }
 
+  private updateEmbedValidationStatus = (
+    element: ExcalidrawEmbeddableElement,
+    status: boolean,
+  ) => {
+    this.embedsValidationStatus.set(element.id, status);
+    ShapeCache.delete(element);
+  };
+
   private updateEmbeddables = () => {
     const iframeLikes = new Set<ExcalidrawIframeLikeElement["id"]>();
 
@@ -851,7 +894,7 @@ class App extends React.Component<AppProps, AppState> {
     this.scene.getNonDeletedElements().filter((element) => {
       if (isEmbeddableElement(element)) {
         iframeLikes.add(element.id);
-        if (element.validated == null) {
+        if (!this.embedsValidationStatus.has(element.id)) {
           updated = true;
 
           const validated = embeddableURLValidator(
@@ -859,8 +902,7 @@ class App extends React.Component<AppProps, AppState> {
             this.props.validateEmbeddable,
           );
 
-          mutateElement(element, { validated }, false);
-          ShapeCache.delete(element);
+          this.updateEmbedValidationStatus(element, validated);
         }
       } else if (isIframeElement(element)) {
         iframeLikes.add(element.id);
@@ -889,7 +931,9 @@ class App extends React.Component<AppProps, AppState> {
       .getNonDeletedElements()
       .filter(
         (el): el is NonDeleted<ExcalidrawIframeLikeElement> =>
-          (isEmbeddableElement(el) && !!el.validated) || isIframeElement(el),
+          (isEmbeddableElement(el) &&
+            this.embedsValidationStatus.get(el.id) === true) ||
+          isIframeElement(el),
       );
 
     return (
@@ -1471,7 +1515,9 @@ class App extends React.Component<AppProps, AppState> {
                         <div className="excalidraw-textEditorContainer" />
                         <div className="excalidraw-contextMenuContainer" />
                         <div className="excalidraw-eye-dropper-container" />
-                        <LaserToolOverlay manager={this.laserPathManager} />
+                        <SVGLayer
+                          trails={[this.laserTrails, this.eraserTrail]}
+                        />
                         {selectedElements.length === 1 &&
                           this.state.showHyperlinkPopup && (
                             <Hyperlink
@@ -1480,6 +1526,9 @@ class App extends React.Component<AppProps, AppState> {
                               setAppState={this.setAppState}
                               onLinkOpen={this.props.onLinkOpen}
                               setToast={this.setToast}
+                              updateEmbedValidationStatus={
+                                this.updateEmbedValidationStatus
+                              }
                             />
                           )}
                         {this.props.aiEnabled !== false &&
@@ -1590,6 +1639,7 @@ class App extends React.Component<AppProps, AppState> {
                             renderGrid: true,
                             canvasBackgroundColor:
                               this.state.viewBackgroundColor,
+                            embedsValidationStatus: this.embedsValidationStatus,
                             elementsPendingErasure: this.elementsPendingErasure,
                           }}
                         />
@@ -2394,7 +2444,8 @@ class App extends React.Component<AppProps, AppState> {
     this.removeEventListeners();
     this.scene.destroy();
     this.library.destroy();
-    this.laserPathManager.destroy();
+    this.laserTrails.stop();
+    this.eraserTrail.stop();
     this.onChangeEmitter.clear();
     ShapeCache.destroy();
     SnapCache.destroy();
@@ -2617,6 +2668,10 @@ class App extends React.Component<AppProps, AppState> {
     }
     if (prevProps.langCode !== this.props.langCode) {
       this.updateLanguage();
+    }
+
+    if (isEraserActive(prevState) && !isEraserActive(this.state)) {
+      this.eraserTrail.endPath();
     }
 
     if (prevProps.viewModeEnabled !== this.props.viewModeEnabled) {
@@ -5070,7 +5125,12 @@ class App extends React.Component<AppProps, AppState> {
     pointerDownState: PointerDownState,
     scenePointer: { x: number; y: number },
   ) => {
+    this.eraserTrail.addPointToPath(scenePointer.x, scenePointer.y);
+
     let didChange = false;
+
+    const processedGroups = new Set<ExcalidrawElement["id"]>();
+    const nonDeletedElements = this.scene.getNonDeletedElements();
 
     const processElements = (elements: ExcalidrawElement[]) => {
       for (const element of elements) {
@@ -5085,6 +5145,25 @@ class App extends React.Component<AppProps, AppState> {
         } else if (!this.elementsPendingErasure.has(element.id)) {
           didChange = true;
           this.elementsPendingErasure.add(element.id);
+        }
+
+        // (un)erase groups atomically
+        if (didChange && element.groupIds?.length) {
+          const shallowestGroupId = element.groupIds.at(-1)!;
+          if (!processedGroups.has(shallowestGroupId)) {
+            processedGroups.add(shallowestGroupId);
+            const elems = getElementsInGroup(
+              nonDeletedElements,
+              shallowestGroupId,
+            );
+            for (const elem of elems) {
+              if (event.altKey) {
+                this.elementsPendingErasure.delete(elem.id);
+              } else {
+                this.elementsPendingErasure.add(elem.id);
+              }
+            }
+          }
         }
       }
     };
@@ -5500,7 +5579,7 @@ class App extends React.Component<AppProps, AppState> {
         this.state.activeTool.type,
       );
     } else if (this.state.activeTool.type === "laser") {
-      this.laserPathManager.startPath(
+      this.laserTrails.startPath(
         pointerDownState.lastCoords.x,
         pointerDownState.lastCoords.y,
       );
@@ -5520,6 +5599,13 @@ class App extends React.Component<AppProps, AppState> {
       pointerDownState,
       event,
     );
+
+    if (this.state.activeTool.type === "eraser") {
+      this.eraserTrail.startPath(
+        pointerDownState.lastCoords.x,
+        pointerDownState.lastCoords.y,
+      );
+    }
 
     const onPointerMove =
       this.onPointerMoveFromPointerDownHandler(pointerDownState);
@@ -6384,7 +6470,6 @@ class App extends React.Component<AppProps, AppState> {
       width: embedLink.intrinsicSize.w,
       height: embedLink.intrinsicSize.h,
       link,
-      validated: null,
     });
 
     this.scene.replaceAllElements([
@@ -6618,7 +6703,6 @@ class App extends React.Component<AppProps, AppState> {
     if (elementType === "embeddable") {
       element = newEmbeddableElement({
         type: "embeddable",
-        validated: null,
         ...baseElementAttributes,
       });
     } else {
@@ -6784,7 +6868,7 @@ class App extends React.Component<AppProps, AppState> {
       }
 
       if (this.state.activeTool.type === "laser") {
-        this.laserPathManager.addPointToPath(pointerCoords.x, pointerCoords.y);
+        this.laserTrails.addPointToPath(pointerCoords.x, pointerCoords.y);
       }
 
       const [gridX, gridY] = getGridPoint(
@@ -7793,6 +7877,8 @@ class App extends React.Component<AppProps, AppState> {
       const pointerEnd = this.lastPointerUpEvent || this.lastPointerMoveEvent;
 
       if (isEraserActive(this.state) && pointerStart && pointerEnd) {
+        this.eraserTrail.endPath();
+
         const draggedDistance = distance2d(
           pointerStart.clientX,
           pointerStart.clientY,
@@ -8041,7 +8127,7 @@ class App extends React.Component<AppProps, AppState> {
       }
 
       if (activeTool.type === "laser") {
-        this.laserPathManager.endPath();
+        this.laserTrails.endPath();
         return;
       }
 
