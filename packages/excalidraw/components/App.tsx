@@ -216,7 +216,6 @@ import {
   getNormalizedZoom,
   getSelectedElements,
   hasBackground,
-  isOverScrollBars,
   isSomeElementSelected,
 } from "../scene";
 import Scene from "../scene/Scene";
@@ -409,6 +408,7 @@ import { LaserTrails } from "../laser-trails";
 import { withBatchedUpdates, withBatchedUpdatesThrottled } from "../reactUtils";
 import { getRenderOpacity } from "../renderer/renderElement";
 import { textWysiwyg } from "../element/textWysiwyg";
+import { isOverScrollBars } from "../scene/scrollbars";
 
 const AppContext = React.createContext<AppClassProperties>(null!);
 const AppPropsContext = React.createContext<AppProps>(null!);
@@ -7564,6 +7564,7 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ pendingImageElementId: null });
       }
 
+      this.props?.onPointerUp?.(activeTool, pointerDownState);
       this.onPointerUpEmitter.trigger(
         this.state.activeTool,
         pointerDownState,
